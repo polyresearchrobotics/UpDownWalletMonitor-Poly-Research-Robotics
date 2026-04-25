@@ -1,0 +1,12 @@
+node_modules
+.next
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+
+# Cycle logger data (should live outside project dir)
+tracked-wallets/
