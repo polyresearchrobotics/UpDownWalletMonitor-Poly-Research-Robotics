@@ -2,7 +2,6 @@
 
 import type { ReactNode } from "react";
 import { ASSETS, TIMEFRAMES, type AssetId, type TimeframeId } from "@/lib/markets";
-import { CycleLoggerControls } from "./CycleLoggerControls";
 
 export interface SidebarButton {
   id: string;
@@ -98,10 +97,6 @@ export function IndicatorsSidebar({
             );
           })}
         </div>
-      </Section>
-
-      <Section title="Cycle Logger">
-        <CycleLoggerControls />
       </Section>
 
       {buttons.length > 0 && (

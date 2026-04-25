@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export interface WalletTradeStreamEvent {
+export interface WalletTrade {
   id: string;
   tokenId: string;
   tokenLabel: string;
@@ -17,6 +17,10 @@ export interface WalletTradeStreamEvent {
   txHash: string;
   orderHash: string;
   executionRole: "TAKER" | "MAKER" | "UNKNOWN";
+  status?: string;
+}
+
+export interface WalletTradeStreamEvent extends WalletTrade {
   wallet: string;
   marketSlug: string;
   conditionId: string;

@@ -1,98 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-
-interface TrackedWallet {
-  address: string;
-  label: string;
-  enabled: boolean;
-}
+import { useState } from "react";
+import { useTrackedWallets } from "@/hooks/useTrackedWallets";
 
 export function WalletsPanel() {
-  const [wallets, setWallets] = useState<TrackedWallet[]>([]);
+  const { wallets, error, addWallet, removeWallet, setEnabled, MAX_WALLETS } =
+    useTrackedWallets();
   const [addressInput, setAddressInput] = useState("");
   const [labelInput, setLabelInput] = useState("");
-  const [walletError, setWalletError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/cycle-logger/wallets");
-      if (res.ok) {
-        const data = await res.json();
-        setWallets(data.wallets || []);
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [refresh]);
-
-  const addWallet = useCallback(async () => {
-    setWalletError(null);
-    const addr = addressInput.trim();
-    if (!addr) return;
-    try {
-      const res = await fetch("/api/cycle-logger/wallets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: addr, label: labelInput.trim() }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setWallets(data.wallets || []);
-        setAddressInput("");
-        setLabelInput("");
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setWalletError(err.error || "Failed to add wallet");
-      }
-    } catch {
-      setWalletError("Network error");
+  const submit = () => {
+    if (addWallet(addressInput, labelInput)) {
+      setAddressInput("");
+      setLabelInput("");
     }
-  }, [addressInput, labelInput]);
-
-  const setEnabled = useCallback(async (address: string | null) => {
-    setWalletError(null);
-    try {
-      const res = await fetch("/api/cycle-logger/wallets", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setWallets(data.wallets || []);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setWalletError(err.error || `Failed to update wallet (${res.status})`);
-      }
-    } catch (e: any) {
-      setWalletError(e?.message || "Network error");
-    }
-  }, []);
-
-  const deleteWallet = useCallback(async (address: string) => {
-    setWalletError(null);
-    try {
-      const res = await fetch("/api/cycle-logger/wallets", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setWallets(data.wallets || []);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        setWalletError(err.error || `Failed to remove wallet (${res.status})`);
-      }
-    } catch (e: any) {
-      setWalletError(e?.message || "Network error");
-    }
-  }, []);
+  };
 
   return (
     <div className="card p-7 md:p-8">
@@ -101,7 +23,8 @@ export function WalletsPanel() {
           Tracked Wallets
         </div>
         <div className="text-[12.5px] text-[var(--muted-foreground)] mt-1">
-          Add traders to log their orders alongside each cycle. Up to 10 wallets.
+          Add traders to plot their orders on the chart in real time. Stored in
+          your browser. Up to {MAX_WALLETS} wallets.
         </div>
       </div>
 
@@ -115,7 +38,7 @@ export function WalletsPanel() {
             value={addressInput}
             onChange={(e) => setAddressInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") addWallet();
+              if (e.key === "Enter") submit();
             }}
             autoComplete="off"
             spellCheck={false}
@@ -131,23 +54,23 @@ export function WalletsPanel() {
             value={labelInput}
             onChange={(e) => setLabelInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") addWallet();
+              if (e.key === "Enter") submit();
             }}
           />
         </div>
         <button
           type="button"
           className="btn btn-primary"
-          onClick={addWallet}
-          disabled={!addressInput.trim() || wallets.length >= 10}
+          onClick={submit}
+          disabled={!addressInput.trim() || wallets.length >= MAX_WALLETS}
         >
           Add wallet
         </button>
       </div>
 
-      {walletError && (
+      {error && (
         <p className="mt-3 text-[12.5px]" style={{ color: "var(--danger)" }}>
-          {walletError}
+          {error}
         </p>
       )}
 
@@ -205,7 +128,7 @@ export function WalletsPanel() {
               </button>
               <button
                 type="button"
-                onClick={() => deleteWallet(w.address)}
+                onClick={() => removeWallet(w.address)}
                 className="btn btn-ghost"
                 style={{ color: "var(--danger)" }}
               >
@@ -216,7 +139,7 @@ export function WalletsPanel() {
         )}
         {wallets.length > 0 && (
           <div className="text-[11px] text-[var(--subtle-foreground)] text-right pt-1">
-            {wallets.length} / 10 wallets
+            {wallets.length} / {MAX_WALLETS} wallets
           </div>
         )}
       </div>

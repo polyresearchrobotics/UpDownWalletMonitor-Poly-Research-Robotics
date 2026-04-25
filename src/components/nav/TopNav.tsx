@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 
 const LINKS = [
   { href: "/indicators", label: "Indicators" },
-  { href: "/settings", label: "Settings" },
 ];
 
 // Plain <a> tags (not next/link) so navigation is always a full page load.

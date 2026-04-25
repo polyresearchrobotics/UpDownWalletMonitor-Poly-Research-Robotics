@@ -1,14 +1,13 @@
 'use client';
 
 import { useMemo, useState, useEffect, useRef } from "react";
-import Link from "next/link";
 import useSWR from "swr";
 import { useBinancePrice } from "@/hooks/useBinancePrice";
 import { useBTCMarketWebSocket } from "@/hooks/useBTCMarketWebSocket";
 import type { BookDepthSnapshot } from "@/hooks/useBTCMarketWebSocket";
 import { useChainlinkStream } from "@/hooks/useChainlinkStream";
-import type { WalletTrade } from "@/hooks/useWalletTracker";
-import { useWalletTradeStream } from "@/hooks/useWalletTradeStream";
+import { useWalletTradeStream, type WalletTrade } from "@/hooks/useWalletTradeStream";
+import { useTrackedWallets } from "@/hooks/useTrackedWallets";
 import { IndicatorChart } from "@/components/indicators/IndicatorChart";
 import { WalletsPanel } from "@/components/indicators/WalletsPanel";
 import { Modal } from "@/components/indicators/Modal";
@@ -26,29 +25,17 @@ import {
 } from "@/lib/markets";
 import type { Crypto5mMarket, Crypto5mResponse } from "@/app/api/crypto/5m-markets/route";
 
-interface TrackedWallet {
-  address: string;
-  label: string;
-  enabled: boolean;
-}
-
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 function StatusRow({
   connected,
   label,
   disabled = false,
-  settingsHref,
-  onNavigate,
 }: {
   connected: boolean;
   label: string;
-  /** Feed has no credentials configured — show "Disabled" + Connect button. */
+  /** Feed has no credentials configured — show "Disabled". */
   disabled?: boolean;
-  /** Where the Connect button routes to (e.g. "/settings"). */
-  settingsHref?: string;
-  /** Called before navigation so the parent can close the modal. */
-  onNavigate?: () => void;
 }) {
   const dotColor = disabled
     ? "rgba(236,236,243,0.35)"
@@ -78,28 +65,12 @@ function StatusRow({
         />
         <span className="text-[13px] text-[var(--foreground)]">{label}</span>
       </div>
-      <div className="flex items-center gap-3">
-        <span
-          className="text-[11px] uppercase tracking-wide font-mono"
-          style={{ color: statusColor }}
-        >
-          {statusText}
-        </span>
-        {disabled && settingsHref && (
-          <Link
-            href={settingsHref}
-            onClick={onNavigate}
-            className="text-[11px] uppercase tracking-wide font-mono px-2.5 py-1 rounded-md transition-colors"
-            style={{
-              background: "var(--surface-hover)",
-              border: "1px solid var(--border)",
-              color: "var(--foreground)",
-            }}
-          >
-            Connect
-          </Link>
-        )}
-      </div>
+      <span
+        className="text-[11px] uppercase tracking-wide font-mono"
+        style={{ color: statusColor }}
+      >
+        {statusText}
+      </span>
     </div>
   );
 }
@@ -472,22 +443,7 @@ export default function IndicatorsPage() {
   const chainlinkDisabled = chainlinkStatus === "disabled";
 
   // ── Tracked wallets + live trades (via Polymarket RTDS WebSocket) ────────
-  const [trackedWallets, setTrackedWallets] = useState<TrackedWallet[]>([]);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/cycle-logger/wallets");
-        if (res.ok) {
-          const data = await res.json();
-          setTrackedWallets(data.wallets || []);
-        }
-      } catch {}
-    }
-    load();
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, []);
+  const { wallets: trackedWallets } = useTrackedWallets();
 
   const walletAddresses = useMemo(
     () =>
@@ -749,8 +705,6 @@ export default function IndicatorsPage() {
             connected={chainlinkOk}
             label="Chainlink"
             disabled={chainlinkDisabled}
-            settingsHref="/settings"
-            onNavigate={() => setOpenPanel(null)}
           />
           <StatusRow connected={polyConnected} label="Polymarket" />
           {walletAddresses.length > 0 && (

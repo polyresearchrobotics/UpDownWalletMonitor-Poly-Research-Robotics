@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, memo, useState } from "react";
-import type { WalletTrade } from "@/hooks/useWalletTracker";
+import type { WalletTrade } from "@/hooks/useWalletTradeStream";
 
 // Dark theme colors — tuned to match the app's dark surface.
 const COLORS = {
