@@ -466,12 +466,24 @@ export default function IndicatorsPage() {
     if (!chartCycleSlug || tokenIds.length < 2) return [];
     const upToken = tokenIds[0];
     const downToken = tokenIds[1];
-    const filtered = walletStreamTrades.filter(
-      (t) =>
+    // Match by slug or token id when those are present; otherwise fall
+    // through on timestamp-in-cycle so REST-polled trades (where
+    // /activity may return an event-level slug instead of the per-cycle
+    // slug, and where the cycle may have rolled by the time the poll
+    // arrives) still plot. Without this branch, valid trades silently
+    // disappear from the chart even though they show in the trade feed.
+    const cStart = chartCycleStartTime;
+    const cEnd = chartCycleEndTime;
+    const filtered = walletStreamTrades.filter((t) => {
+      if (
         t.marketSlug === chartCycleSlug ||
         t.tokenId === upToken ||
         t.tokenId === downToken
-    );
+      ) {
+        return true;
+      }
+      return cStart > 0 && cEnd > 0 && t.timestamp >= cStart && t.timestamp <= cEnd;
+    });
     // Widen outcome from token id when the stream's token_label is missing.
     return filtered.map((t) => ({
       id: t.id,
@@ -496,7 +508,7 @@ export default function IndicatorsPage() {
       orderHash: t.orderHash,
       executionRole: t.executionRole,
     }));
-  }, [walletStreamTrades, chartCycleSlug, tokenIds]);
+  }, [walletStreamTrades, chartCycleSlug, tokenIds, chartCycleStartTime, chartCycleEndTime]);
 
   type PanelId = "connections";
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
@@ -639,7 +651,10 @@ export default function IndicatorsPage() {
 
       {/* Wallets */}
       <div className="mt-10">
-        <WalletsPanel />
+        <WalletsPanel
+          streamTrades={walletStreamTrades}
+          isStreaming={walletStreamConnected}
+        />
       </div>
 
       {/* Chart */}

@@ -2,25 +2,25 @@
 
 import { useMemo, useState } from "react";
 import { useTrackedWallets } from "@/hooks/useTrackedWallets";
-import { useWalletTradeStream } from "@/hooks/useWalletTradeStream";
+import type { WalletTradeStreamEvent } from "@/hooks/useWalletTradeStream";
 
-export function WalletsPanel() {
+interface WalletsPanelProps {
+  // Lifted from the indicators page so we don't open a duplicate
+  // browser-side Polymarket RTDS WebSocket per page mount.
+  streamTrades: WalletTradeStreamEvent[];
+  isStreaming: boolean;
+}
+
+export function WalletsPanel({ streamTrades, isStreaming }: WalletsPanelProps) {
   const { wallets, error, addWallet, removeWallet, setEnabled, MAX_WALLETS } =
     useTrackedWallets();
   const [addressInput, setAddressInput] = useState("");
   const [labelInput, setLabelInput] = useState("");
 
-  // Debug indicator: subscribe to the trade stream here as well so we can
-  // surface "live trades received" feedback the moment a wallet is added,
-  // independent of whether the chart's filter picks them up.
   const enabledAddresses = useMemo(
     () => wallets.filter((w) => w.enabled).map((w) => w.address.toLowerCase()),
     [wallets]
   );
-  const { trades: streamTrades, isStreaming } = useWalletTradeStream({
-    wallets: enabledAddresses,
-    enabled: enabledAddresses.length > 0,
-  });
   const recentTrade = streamTrades[streamTrades.length - 1];
 
   const submit = () => {

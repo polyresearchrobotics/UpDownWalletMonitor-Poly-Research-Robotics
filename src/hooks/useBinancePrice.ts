@@ -64,12 +64,27 @@ export function useBinancePrice({
   const spotOpenedRef = useRef(false);
 
   enabledRef.current = enabled;
-  symbolRef.current = symbol;
+  // Detect symbol changes synchronously so the stale price from the previous
+  // asset doesn't leak through to subscribers (e.g. the chart's barcode
+  // filter would reject every fresh ETH price as a "huge jump" away from
+  // BTC's last $77k value).
+  if (symbolRef.current !== symbol) {
+    symbolRef.current = symbol;
+  }
 
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  // Clear stale prices the moment the user switches asset. Without this the
+  // chart's anti-barcode filter rejects every fresh price for the new asset
+  // because it compares against BTC-sized values still sitting in `spot`/
+  // `futures` state from before the symbol changed.
+  useEffect(() => {
+    setSpot(null);
+    setFutures(null);
+  }, [symbol]);
 
   // Stable connect functions that read from refs -- never recreated
   const connectSpot = useCallback(() => {
@@ -95,8 +110,12 @@ export function useBinancePrice({
     const armStaleTimer = (timeoutMs: number) => {
       if (spotStaleTimerRef.current) clearTimeout(spotStaleTimerRef.current);
       spotStaleTimerRef.current = setTimeout(() => {
+        // A newer connectSpot() may have replaced the active socket before
+        // this timer fired — closing the live one would yank the user
+        // offline mid-stream.
+        if (!isActive()) return;
         spotHostIdxRef.current = (spotHostIdxRef.current + 1) % SPOT_HOSTS.length;
-        if (spotWsRef.current) spotWsRef.current.close();
+        try { ws.close(); } catch {}
       }, timeoutMs);
     };
 
