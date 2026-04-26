@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 
-const POLYMARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
-
 interface PriceData {
   tokenId: string;
   bestBid: number;
@@ -53,12 +51,11 @@ export function useBTCMarketWebSocket({
   tokenIds,
   enabled = true,
 }: UseBTCMarketWebSocketOptions): UseBTCMarketWebSocketReturn {
-  const wsRef = useRef<WebSocket | null>(null);
+  const esRef = useRef<EventSource | null>(null);
   const [prices, setPrices] = useState<Map<string, PriceData>>(new Map());
   const [books, setBooks] = useState<Map<string, BookDepthSnapshot>>(new Map());
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const subscribedTokensRef = useRef<Set<string>>(new Set());
   const pricesRef = useRef<Map<string, PriceData>>(prices);
   const mountedRef = useRef(true);
 
@@ -118,84 +115,114 @@ export function useBTCMarketWebSocket({
     });
   }, []);
 
-  const subscribe = useCallback((ws: WebSocket, tokens: string[]) => {
-    if (ws.readyState !== WebSocket.OPEN || tokens.length === 0) return;
-    const newTokens = tokens.filter(t => !subscribedTokensRef.current.has(t));
-    if (newTokens.length === 0) return;
-    ws.send(JSON.stringify({ type: "subscribe", channel: "market", assets_ids: newTokens }));
-    newTokens.forEach(t => subscribedTokensRef.current.add(t));
-  }, []);
+  // Handlers split out so we can attach them as named EventSource listeners.
+  // EventSource fires by `event:` name, so each Polymarket event_type needs
+  // its own addEventListener call. The body is identical to the previous
+  // direct-WS onmessage logic.
+  const handleBook = useCallback((evt: MessageEvent) => {
+    if (!mountedRef.current) return;
+    try {
+      const message = JSON.parse(evt.data);
+      const timestamp = message.timestamp ? parseInt(message.timestamp, 10) : Date.now();
+      if (!message.asset_id) return;
+      const buysRaw = message.buys || message.bids || [];
+      const sellsRaw = message.sells || message.asks || [];
+      const bestBid = buysRaw[0]?.price ? parseFloat(buysRaw[0].price) : 0;
+      const bestAsk = sellsRaw[0]?.price ? parseFloat(sellsRaw[0].price) : 0;
+      if (bestBid > 0.005 || bestAsk > 0.005) {
+        const existing = pricesRef.current.get(message.asset_id);
+        updatePrice(message.asset_id, bestBid, bestAsk, existing?.lastTradePrice ?? null, timestamp);
+      }
+      updateBook(message.asset_id, buysRaw, sellsRaw, timestamp);
+    } catch {}
+  }, [updatePrice, updateBook]);
+
+  const handlePriceChange = useCallback((evt: MessageEvent) => {
+    if (!mountedRef.current) return;
+    try {
+      const message = JSON.parse(evt.data);
+      const timestamp = message.timestamp ? parseInt(message.timestamp, 10) : Date.now();
+      if (!message.price_changes) return;
+      for (const change of message.price_changes) {
+        if (change.best_bid === undefined || change.best_ask === undefined) continue;
+        const bestBid = parseFloat(change.best_bid);
+        const bestAsk = parseFloat(change.best_ask);
+        if (!isFinite(bestBid) || !isFinite(bestAsk)) continue;
+        const existing = pricesRef.current.get(change.asset_id);
+        updatePrice(change.asset_id, bestBid, bestAsk, existing?.lastTradePrice ?? null, timestamp);
+      }
+    } catch {}
+  }, [updatePrice]);
+
+  const handleLastTradePrice = useCallback((evt: MessageEvent) => {
+    if (!mountedRef.current) return;
+    try {
+      const message = JSON.parse(evt.data);
+      const timestamp = message.timestamp ? parseInt(message.timestamp, 10) : Date.now();
+      if (!message.asset_id || !message.price) return;
+      const lastTradePrice = parseFloat(message.price);
+      if (isFinite(lastTradePrice) && lastTradePrice > 0.005 && lastTradePrice < 0.995) {
+        const existing = pricesRef.current.get(message.asset_id);
+        if (existing) {
+          updatePrice(message.asset_id, existing.bestBid, existing.bestAsk, lastTradePrice, timestamp);
+        }
+      }
+    } catch {}
+  }, [updatePrice]);
 
   // connect reads everything from refs -- zero deps, never recreated, no stale closures
   const connect = useCallback(() => {
     if (!enabledRef.current || tokenIdsRef.current.length === 0) return;
-    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
     if (reconnectTimeoutRef.current) { clearTimeout(reconnectTimeoutRef.current); reconnectTimeoutRef.current = null; }
 
-    subscribedTokensRef.current.clear();
+    const url = `/api/polymarket/market-stream?tokenIds=${encodeURIComponent(tokenIdsRef.current.join(","))}`;
+    const es = new EventSource(url);
+    esRef.current = es;
+    // Same orphan guard as useBinancePrice — when the user switches asset
+    // mid-flight, the cleanup closes this EventSource but its buffered
+    // events / async error fires AFTER a fresh `connect()` has already
+    // replaced `esRef.current`. Without this check, an orphan would null
+    // the new ref and schedule a duplicate reconnect.
+    const isActive = () => esRef.current === es;
 
-    const ws = new WebSocket(POLYMARKET_WS_URL);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      if (!mountedRef.current) { ws.close(); return; }
+    es.addEventListener("connected", () => {
+      if (!mountedRef.current || !isActive()) return;
       setIsConnected(true);
-      subscribe(ws, tokenIdsRef.current);
-    };
+    });
 
-    ws.onmessage = (event) => {
-      if (!mountedRef.current) return;
-      try {
-        const message = JSON.parse(event.data);
-        const timestamp = message.timestamp ? parseInt(message.timestamp, 10) : Date.now();
+    es.addEventListener("disconnected", () => {
+      if (!mountedRef.current || !isActive()) return;
+      setIsConnected(false);
+    });
 
-        if (message.event_type === "book" && message.asset_id) {
-          const buysRaw = message.buys || message.bids || [];
-          const sellsRaw = message.sells || message.asks || [];
-          // Only derive price if we have real bid/ask levels
-          const bestBid = buysRaw[0]?.price ? parseFloat(buysRaw[0].price) : 0;
-          const bestAsk = sellsRaw[0]?.price ? parseFloat(sellsRaw[0].price) : 0;
-          if (bestBid > 0.005 || bestAsk > 0.005) {
-            const existing = pricesRef.current.get(message.asset_id);
-            updatePrice(message.asset_id, bestBid, bestAsk, existing?.lastTradePrice ?? null, timestamp);
-          }
-          updateBook(message.asset_id, buysRaw, sellsRaw, timestamp);
-        } else if (message.event_type === "price_change" && message.price_changes) {
-          for (const change of message.price_changes) {
-            // Skip if bid or ask is missing — don't fabricate 0/1 defaults
-            if (change.best_bid === undefined || change.best_ask === undefined) continue;
-            const bestBid = parseFloat(change.best_bid);
-            const bestAsk = parseFloat(change.best_ask);
-            if (!isFinite(bestBid) || !isFinite(bestAsk)) continue;
-            const existing = pricesRef.current.get(change.asset_id);
-            updatePrice(change.asset_id, bestBid, bestAsk, existing?.lastTradePrice ?? null, timestamp);
-          }
-        } else if (message.event_type === "last_trade_price" && message.asset_id && message.price) {
-          const lastTradePrice = parseFloat(message.price);
-          if (isFinite(lastTradePrice) && lastTradePrice > 0.005 && lastTradePrice < 0.995) {
-            const existing = pricesRef.current.get(message.asset_id);
-            if (existing) {
-              // Update last trade price but keep existing bid/ask
-              updatePrice(message.asset_id, existing.bestBid, existing.bestAsk, lastTradePrice, timestamp);
-            }
-            // If no existing price data, skip — wait for a book or price_change event with real bid/ask
-          }
-        }
-      } catch {}
-    };
+    const guard =
+      <T extends Event>(fn: (e: T) => void) =>
+      (e: T) => {
+        if (!isActive()) return;
+        fn(e);
+      };
+    es.addEventListener("book", guard(handleBook) as EventListener);
+    es.addEventListener("price_change", guard(handlePriceChange) as EventListener);
+    es.addEventListener("last_trade_price", guard(handleLastTradePrice) as EventListener);
 
-    ws.onerror = () => {};
-    ws.onclose = () => {
+    es.onerror = () => {
+      if (!isActive()) {
+        try { es.close(); } catch {}
+        return;
+      }
       if (!mountedRef.current) return;
       setIsConnected(false);
-      wsRef.current = null;
-      subscribedTokensRef.current.clear();
-      // Reconnect using refs -- always reads latest values, no stale closure
-      if (enabledRef.current && tokenIdsRef.current.length > 0) {
-        reconnectTimeoutRef.current = setTimeout(connect, 1000);
+      // EventSource auto-reconnects, but if it lands in CLOSED (e.g. server
+      // returned non-2xx) we re-open manually after a short backoff.
+      if (es.readyState === EventSource.CLOSED) {
+        esRef.current = null;
+        if (enabledRef.current && tokenIdsRef.current.length > 0) {
+          reconnectTimeoutRef.current = setTimeout(connect, 1000);
+        }
       }
     };
-  }, [subscribe, updatePrice, updateBook]);
+  }, [handleBook, handlePriceChange, handleLastTradePrice]);
 
   // Main connection effect -- only fires when tokenIds actually change by value or enabled changes
   useEffect(() => {
@@ -204,47 +231,10 @@ export function useBTCMarketWebSocket({
     }
     return () => {
       if (reconnectTimeoutRef.current) { clearTimeout(reconnectTimeoutRef.current); reconnectTimeoutRef.current = null; }
-      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
-      subscribedTokensRef.current.clear();
+      if (esRef.current) { esRef.current.close(); esRef.current = null; }
+      setIsConnected(false);
     };
   }, [enabled, stableTokenIds, connect]);
-
-  // Subscribe to new tokens if WS is already open and tokenIds change
-  useEffect(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      subscribe(wsRef.current, stableTokenIds);
-    }
-  }, [stableTokenIds, subscribe]);
-
-  // REST poll fallback — only while the WebSocket is NOT connected. Prior
-  // behavior polled unconditionally alongside the WS, doubling the work
-  // and causing React re-renders to fight each other.
-  useEffect(() => {
-    if (!enabled || stableTokenIds.length === 0 || isConnected) return;
-    let alive = true;
-    const poll = async () => {
-      if (!alive || !mountedRef.current) return;
-      for (const tokenId of tokenIdsRef.current) {
-        if (!alive) break;
-        try {
-          const resp = await fetch(`/api/polymarket/book?token_id=${tokenId}`);
-          if (!resp.ok) continue;
-          const book = await resp.json();
-          const bids = book.bids || book.buys || [];
-          const asks = book.asks || book.sells || [];
-          if (bids.length === 0 && asks.length === 0) continue;
-          const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : 0;
-          const bestAsk = asks.length > 0 ? parseFloat(asks[0].price) : 0;
-          const existing = pricesRef.current.get(tokenId);
-          updatePrice(tokenId, bestBid, bestAsk, existing?.lastTradePrice ?? null, Date.now());
-          updateBook(tokenId, bids, asks, Date.now());
-        } catch {}
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 2000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [enabled, stableTokenIds, isConnected, updatePrice, updateBook]);
 
   return { prices, books, isConnected };
 }

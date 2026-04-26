@@ -10,3 +10,4 @@ node_modules
 
 # Cycle logger data (should live outside project dir)
 tracked-wallets/
+.vercel

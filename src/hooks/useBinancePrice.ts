@@ -82,6 +82,12 @@ export function useBinancePrice({
     const host = SPOT_HOSTS[spotHostIdxRef.current];
     const ws = new WebSocket(`wss://${host}/ws/${symbolRef.current}@trade`);
     spotWsRef.current = ws;
+    // Guard against orphaned sockets: every async handler below checks
+    // that this `ws` is still the active one before mutating shared
+    // state. Without this, a previous symbol's socket finishing its
+    // close/message lifecycle after the user picks a new asset would
+    // overwrite the new socket's ref or smear stale prices into the UI.
+    const isActive = () => spotWsRef.current === ws;
 
     // Rotate host and force-close if we go too long without trades. The
     // socket's own onclose handler will kick off the reconnect to the new
@@ -95,13 +101,13 @@ export function useBinancePrice({
     };
 
     ws.onopen = () => {
-      if (!mountedRef.current) { ws.close(); return; }
+      if (!mountedRef.current || !isActive()) { ws.close(); return; }
       spotOpenedRef.current = true;
       setSpotConnected(true);
       armStaleTimer(FIRST_TRADE_TIMEOUT_MS);
     };
     ws.onmessage = (event) => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !isActive()) return;
       try {
         const msg = JSON.parse(event.data);
         if (msg.e === "trade") {
@@ -112,6 +118,11 @@ export function useBinancePrice({
     };
     ws.onerror = () => {};
     ws.onclose = () => {
+      // Orphan: a newer connectSpot() already replaced the ref. Don't
+      // touch shared state and don't schedule a reconnect — that would
+      // either null out the new socket's ref or kick off a duplicate
+      // socket pumping stale prices into the UI.
+      if (!isActive()) return;
       if (!mountedRef.current) return;
       setSpotConnected(false);
       spotWsRef.current = null;
@@ -134,13 +145,14 @@ export function useBinancePrice({
 
     const ws = new WebSocket(`wss://fstream.binance.com/ws/${symbolRef.current}@trade`);
     futuresWsRef.current = ws;
+    const isActive = () => futuresWsRef.current === ws;
 
     ws.onopen = () => {
-      if (!mountedRef.current) { ws.close(); return; }
+      if (!mountedRef.current || !isActive()) { ws.close(); return; }
       setFuturesConnected(true);
     };
     ws.onmessage = (event) => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !isActive()) return;
       try {
         const msg = JSON.parse(event.data);
         if (msg.e === "trade") {
@@ -150,6 +162,7 @@ export function useBinancePrice({
     };
     ws.onerror = () => {};
     ws.onclose = () => {
+      if (!isActive()) return;
       if (!mountedRef.current) return;
       setFuturesConnected(false);
       futuresWsRef.current = null;
