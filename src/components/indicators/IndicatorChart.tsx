@@ -408,11 +408,47 @@ export const IndicatorChart = memo(function IndicatorChart({
     // Wallet Trade Markers
     const wTrades = walletTradesRef.current;
     if (wTrades.length > 0) {
+      // Find the line's interpolated y-value at a given timestamp so each
+      // trade arrow sits exactly on its corresponding UP/DOWN price line.
+      // Without this the marker plotted at the trade's executed fill
+      // price, which can be a few cents off the live mid (taker fills
+      // cross the spread, makers sit at the bid/ask) and looks detached
+      // from the line. Visually it's misleading.
+      const interpolateLineAt = (
+        pts: { t: number; v: number }[],
+        t: number
+      ): number | null => {
+        if (pts.length === 0) return null;
+        if (t <= pts[0].t) return pts[0].v;
+        if (t >= pts[pts.length - 1].t) return pts[pts.length - 1].v;
+        let lo = 0;
+        let hi = pts.length - 1;
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >> 1;
+          if (pts[mid].t <= t) lo = mid;
+          else hi = mid;
+        }
+        const left = pts[lo];
+        const right = pts[hi];
+        if (right.t === left.t) return left.v;
+        const frac = (t - left.t) / (right.t - left.t);
+        return left.v + frac * (right.v - left.v);
+      };
+
       for (const trade of wTrades) {
         const tx = timeToX(trade.timestamp);
         if (tx < pad.left - 10 || tx > w - pad.right + 10) continue;
 
-        const priceCents = trade.price * 100;
+        // Snap each marker to the line that matches its outcome. UNKNOWN
+        // outcomes (rare — happens when the RTDS payload's `outcome`
+        // field is missing) fall back to the trade's executed price.
+        const linePrice =
+          trade.outcome === "UP"
+            ? interpolateLineAt(upPoints.current, trade.timestamp)
+            : trade.outcome === "DOWN"
+            ? interpolateLineAt(downPoints.current, trade.timestamp)
+            : null;
+        const priceCents = linePrice ?? trade.price * 100;
         const ty = shareToY(priceCents);
         const isBuy = trade.side === "BUY";
         const markerColor = trade.outcome === "UP" ? COLORS.up : trade.outcome === "DOWN" ? COLORS.down : COLORS.tradeBuy;

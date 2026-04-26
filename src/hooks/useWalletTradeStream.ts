@@ -83,12 +83,22 @@ function normalize(
 
   const shares = p.size ?? 0;
   const price = p.price;
-  const timestamp = p.timestamp ?? Math.floor(Date.now() / 1000);
   const txHash = p.transactionHash || "";
 
-  // Stable id: `tx-asset-side-price-shares` lets the consumer dedupe
-  // when the WS replays an event after reconnect.
-  const id = `${p.asset}-${timestamp}-${txHash || `${wallet}-${p.side}-${price}-${shares}`}`;
+  // Polymarket RTDS only sends `timestamp` in whole seconds, so we'd
+  // plot every trade on the second-mark grid. Use the WS receive time
+  // in ms-precision instead — accurate to network arrival, which is
+  // within ~100ms of the actual trade and visually indistinguishable
+  // from the real fill time on a 5-minute cycle chart.
+  const timestamp = Date.now() / 1000;
+
+  // Stable id: prefer the on-chain tx hash (unique per trade and
+  // replay-safe). Fall back to a composite key that doesn't include
+  // the receive-time so dedup still works if the WS replays an event
+  // after reconnect.
+  const id =
+    txHash ||
+    `${p.asset}-${wallet}-${p.side}-${price}-${shares}-${p.timestamp ?? "?"}`;
 
   return {
     id,

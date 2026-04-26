@@ -459,22 +459,27 @@ export default function IndicatorsPage() {
       enabled: walletAddresses.length > 0,
     });
 
-  // Filter to just trades on the current cycle's UP/DOWN tokens so the
-  // chart only plots markers that belong on it.
+  // Filter to just trades on the current asset+timeframe AND the
+  // current cycle's time window. This is stricter than matching the
+  // exact slug because dome/RTDS payloads occasionally carry a parent
+  // event slug instead of the per-cycle slug, but it's tighter than
+  // pure timestamp-in-cycle (which would smear ETH 1h trades onto the
+  // BTC 5m chart whenever a tracked wallet is active on multiple
+  // markets simultaneously — they overlap in time but not in market).
+  //
+  // Polymarket cycle slugs follow `${asset}-updown-${timeframe}-${unix}`
+  // (e.g. `btc-updown-5m-1777115700`), so prefixing on
+  // `${assetId}-updown-${timeframeId}-` filters cross-market noise out.
   const chartCycleSlug = lastValidCycleRef.current?.slug ?? null;
   const walletTrades: WalletTrade[] = useMemo(() => {
     if (!chartCycleSlug || tokenIds.length < 2) return [];
     const upToken = tokenIds[0];
     const downToken = tokenIds[1];
-    // Match by slug or token id when those are present; otherwise fall
-    // through on timestamp-in-cycle so REST-polled trades (where
-    // /activity may return an event-level slug instead of the per-cycle
-    // slug, and where the cycle may have rolled by the time the poll
-    // arrives) still plot. Without this branch, valid trades silently
-    // disappear from the chart even though they show in the trade feed.
+    const slugPrefix = `${assetId}-updown-${timeframeId}-`;
     const cStart = chartCycleStartTime;
     const cEnd = chartCycleEndTime;
     const filtered = walletStreamTrades.filter((t) => {
+      // Exact-cycle match — always plot (covers the happy path).
       if (
         t.marketSlug === chartCycleSlug ||
         t.tokenId === upToken ||
@@ -482,6 +487,10 @@ export default function IndicatorsPage() {
       ) {
         return true;
       }
+      // Same asset+timeframe family + within the visible cycle window.
+      // Without the prefix check, a wallet trading BTC 5m AND ETH 1h
+      // would have its ETH trades smeared onto the BTC chart.
+      if (!t.marketSlug || !t.marketSlug.startsWith(slugPrefix)) return false;
       return cStart > 0 && cEnd > 0 && t.timestamp >= cStart && t.timestamp <= cEnd;
     });
     // Widen outcome from token id when the stream's token_label is missing.
@@ -508,7 +517,7 @@ export default function IndicatorsPage() {
       orderHash: t.orderHash,
       executionRole: t.executionRole,
     }));
-  }, [walletStreamTrades, chartCycleSlug, tokenIds, chartCycleStartTime, chartCycleEndTime]);
+  }, [walletStreamTrades, chartCycleSlug, tokenIds, chartCycleStartTime, chartCycleEndTime, assetId, timeframeId]);
 
   type PanelId = "connections";
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
