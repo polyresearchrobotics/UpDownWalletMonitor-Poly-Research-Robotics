@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { TopNav } from "@/components/nav/TopNav";
+import { BetaToast } from "@/components/BetaToast";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -29,6 +30,7 @@ export default function RootLayout({
       <body>
         <TopNav />
         <main className="pt-20">{children}</main>
+        <BetaToast />
       </body>
     </html>
   );
