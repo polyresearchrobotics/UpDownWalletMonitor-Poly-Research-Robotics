@@ -202,6 +202,15 @@ export async function GET(request: NextRequest) {
       const startTs = Math.floor(Date.now() / 1000) - 60;
       for (const w of wallets) lastSeen.set(w, startTs);
 
+      // Tell the client we're alive RIGHT AWAY so the Connections panel
+      // shows "Wallet Stream: LIVE" within 100ms of opening the SSE.
+      // Without this the panel flickers OFFLINE for up to 6 seconds while
+      // the server tries Dome and (silently failed) Polymarket WS before
+      // falling back to REST polling. Subsequent transport-specific
+      // `connected` events from each backend are treated as no-ops
+      // client-side (idempotent setIsStreaming(true)).
+      send("connected", { wallets, transport: "init" });
+
       // Dome SDK path — fires when DOME_API_KEY is configured. This is
       // the most reliable source: a wallet-targeted WS designed for
       // exactly this use case. We still keep the REST fallback wired up
@@ -281,7 +290,10 @@ export async function GET(request: NextRequest) {
               });
 
               ws.on("close", () => {
-                send("disconnected", { ts: Date.now(), source: "dome" });
+                // Don't emit `disconnected` here — REST polling kicks in
+                // automatically and keeps trades flowing. Telling the
+                // client we're disconnected just makes the Connections
+                // panel flicker OFFLINE.
               });
               ws.on("error", (err: unknown) => {
                 send("error", { message: (err as { message?: string })?.message || "Dome WS error", source: "dome" });
