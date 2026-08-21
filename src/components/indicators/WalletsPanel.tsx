@@ -208,25 +208,31 @@ export function WalletsPanel({ streamTrades, isStreaming }: WalletsPanelProps) {
               {streamTrades.length} received
             </div>
           </div>
-          {streamTrades.length === 0 ? (
-            <div
-              className="rounded-lg py-6 text-center text-[12px]"
-              style={{
-                border: "1px dashed var(--border)",
-                color: "var(--muted-foreground)",
-                background: "var(--surface-2)",
-              }}
-            >
-              {isStreaming
-                ? "Connected — waiting for the wallet's next trade…"
-                : "Connecting to trade stream…"}
-            </div>
-          ) : (
-            <div className="space-y-1.5 max-h-[260px] overflow-y-auto">
-              {streamTrades
-                .slice(-20)
-                .reverse()
-                .map((t) => {
+          {/* Fixed-height feed window. The height is locked via an inline
+              style (not a Tailwind arbitrary class) so it's guaranteed to
+              apply: the box occupies the same space whether it holds 0 or
+              20 trades, so a fast-trading wallet never reflows the chart /
+              orderbooks below it. New trades scroll *inside* this window. */}
+          <div className="overflow-y-auto" style={{ height: 300 }}>
+            {streamTrades.length === 0 ? (
+              <div
+                className="h-full rounded-lg flex items-center justify-center text-center text-[12px] px-4"
+                style={{
+                  border: "1px dashed var(--border)",
+                  color: "var(--muted-foreground)",
+                  background: "var(--surface-2)",
+                }}
+              >
+                {isStreaming
+                  ? "Connected — waiting for the wallet's next trade…"
+                  : "Connecting to trade stream…"}
+              </div>
+            ) : (
+              <div className="space-y-1.5 pr-1">
+                {streamTrades
+                  .slice(-20)
+                  .reverse()
+                  .map((t) => {
                   const isBuy = t.side === "BUY";
                   const outcomeColor =
                     t.outcome === "UP"
@@ -275,8 +281,9 @@ export function WalletsPanel({ streamTrades, isStreaming }: WalletsPanelProps) {
                     </div>
                   );
                 })}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

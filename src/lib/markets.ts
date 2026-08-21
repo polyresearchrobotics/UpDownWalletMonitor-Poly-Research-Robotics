@@ -23,6 +23,11 @@ export interface TimeframeDef {
   label: string;
   /** Cycle duration in seconds. 5m → 300, 15m → 900. */
   seconds: number;
+  /**
+   * Chainlink TWAP averaging window (seconds) Polymarket settles this
+   * timeframe on: 5m cycles use the 30s TWAP, 15m cycles the 60s TWAP.
+   */
+  twapWindowSeconds: 30 | 60;
 }
 
 export const ASSETS: AssetDef[] = [
@@ -67,8 +72,8 @@ export const ASSETS: AssetDef[] = [
 // Polymarket up/down markets follow the `{asset}-updown-{tf}` slug pattern.
 // Add new timeframes here once the upstream slug scheme is confirmed.
 export const TIMEFRAMES: TimeframeDef[] = [
-  { id: "5m", label: "5 minute", seconds: 300 },
-  { id: "15m", label: "15 minute", seconds: 900 },
+  { id: "5m", label: "5 minute", seconds: 300, twapWindowSeconds: 30 },
+  { id: "15m", label: "15 minute", seconds: 900, twapWindowSeconds: 60 },
 ];
 
 export function getAsset(id: AssetId): AssetDef {

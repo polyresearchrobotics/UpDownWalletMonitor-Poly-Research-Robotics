@@ -6,11 +6,14 @@ import { useBinancePrice } from "@/hooks/useBinancePrice";
 import { useBTCMarketWebSocket } from "@/hooks/useBTCMarketWebSocket";
 import type { BookDepthSnapshot } from "@/hooks/useBTCMarketWebSocket";
 import { useChainlinkStream } from "@/hooks/useChainlinkStream";
+import { useTwapStream } from "@/hooks/useTwapStream";
 import { useWalletTradeStream, type WalletTrade } from "@/hooks/useWalletTradeStream";
 import { useTrackedWallets } from "@/hooks/useTrackedWallets";
 import { IndicatorChart } from "@/components/indicators/IndicatorChart";
 import { WalletsPanel } from "@/components/indicators/WalletsPanel";
 import { Modal } from "@/components/indicators/Modal";
+import { SessionGate } from "@/components/indicators/SessionGate";
+import { useMonitorSession } from "@/hooks/useMonitorSession";
 import {
   IndicatorsSidebar,
   ConnectionsIcon,
@@ -98,12 +101,12 @@ function PriceCard({
       ? "var(--danger)"
       : "var(--foreground)";
   return (
-    <div className="card p-7 md:p-8">
-      <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--subtle-foreground)]">
+    <div className="card p-5 md:p-6 min-w-0">
+      <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--subtle-foreground)] whitespace-nowrap overflow-hidden text-ellipsis">
         {label}
       </div>
       <div
-        className="mt-4 text-[22px] md:text-[26px] font-semibold font-mono tracking-tight leading-none"
+        className="mt-3 text-[17px] md:text-[21px] font-semibold font-mono tracking-tight leading-none whitespace-nowrap"
         style={{ color }}
       >
         {value}
@@ -121,7 +124,10 @@ function OrderbookPanel({
   book: BookDepthSnapshot | undefined;
   accentColor: "up" | "down";
 }) {
-  const maxLevels = 10;
+  // Show a deep book and let it scroll INSIDE a fixed-height window, so the
+  // panel never changes height (never pushes the rest of the page) no matter
+  // how the book updates — the user scrolls within the box to see more levels.
+  const maxLevels = 50;
   const bids = book?.bids.slice(0, maxLevels) ?? [];
   const asks = book?.asks.slice(0, maxLevels) ?? [];
   const maxSize = Math.max(
@@ -134,6 +140,34 @@ function OrderbookPanel({
     accentColor === "up"
       ? "rgba(52, 208, 140, 0.12)"
       : "rgba(255, 93, 115, 0.12)";
+
+  const renderLevels = (
+    levels: BookDepthSnapshot["bids"],
+    side: "bid" | "ask"
+  ) =>
+    levels.map((level, i) => (
+      <div
+        key={i}
+        className="relative grid grid-cols-2 px-5 py-2 text-[12px] font-mono"
+      >
+        <div
+          className="absolute inset-y-0"
+          style={{
+            ...(side === "bid" ? { right: 0 } : { left: 0 }),
+            width: `${(level.size / maxSize) * 100}%`,
+            background: barBg,
+          }}
+        />
+        <span className="relative z-10" style={{ color }}>
+          {(level.price * 100).toFixed(1)}¢
+        </span>
+        <span className="relative z-10 text-right text-[var(--muted-foreground)]">
+          {level.size >= 1000
+            ? `${(level.size / 1000).toFixed(1)}k`
+            : level.size.toFixed(0)}
+        </span>
+      </div>
+    ));
 
   return (
     <div className="card overflow-hidden">
@@ -157,83 +191,52 @@ function OrderbookPanel({
             : "—"}
         </span>
       </div>
+      {/* Pinned column headers — stay put while the rows scroll below. */}
       <div
         className="grid grid-cols-2"
         style={{ borderTop: "1px solid var(--border)" }}
       >
-        <div style={{ borderRight: "1px solid var(--border)" }}>
-          <div
-            className="grid grid-cols-2 px-5 py-2.5 text-[10px] uppercase tracking-wide text-[var(--subtle-foreground)]"
-            style={{ background: "var(--surface-2)" }}
-          >
-            <span>Bid</span>
-            <span className="text-right">Size</span>
-          </div>
-          {bids.length === 0 ? (
-            <div className="px-5 py-8 text-[11px] text-[var(--subtle-foreground)] text-center">
-              No bids
-            </div>
-          ) : (
-            bids.map((level, i) => (
-              <div
-                key={i}
-                className="relative grid grid-cols-2 px-5 py-2 text-[12px] font-mono"
-              >
-                <div
-                  className="absolute inset-y-0 right-0"
-                  style={{
-                    width: `${(level.size / maxSize) * 100}%`,
-                    background: barBg,
-                  }}
-                />
-                <span className="relative z-10" style={{ color }}>
-                  {(level.price * 100).toFixed(1)}¢
-                </span>
-                <span className="relative z-10 text-right text-[var(--muted-foreground)]">
-                  {level.size >= 1000
-                    ? `${(level.size / 1000).toFixed(1)}k`
-                    : level.size.toFixed(0)}
-                </span>
-              </div>
-            ))
-          )}
+        <div
+          className="grid grid-cols-2 px-5 py-2.5 text-[10px] uppercase tracking-wide text-[var(--subtle-foreground)]"
+          style={{
+            background: "var(--surface-2)",
+            borderRight: "1px solid var(--border)",
+          }}
+        >
+          <span>Bid</span>
+          <span className="text-right">Size</span>
         </div>
-        <div>
-          <div
-            className="grid grid-cols-2 px-5 py-2.5 text-[10px] uppercase tracking-wide text-[var(--subtle-foreground)]"
-            style={{ background: "var(--surface-2)" }}
-          >
-            <span>Ask</span>
-            <span className="text-right">Size</span>
-          </div>
-          {asks.length === 0 ? (
-            <div className="px-5 py-8 text-[11px] text-[var(--subtle-foreground)] text-center">
-              No asks
-            </div>
-          ) : (
-            asks.map((level, i) => (
-              <div
-                key={i}
-                className="relative grid grid-cols-2 px-5 py-2 text-[12px] font-mono"
-              >
-                <div
-                  className="absolute inset-y-0 left-0"
-                  style={{
-                    width: `${(level.size / maxSize) * 100}%`,
-                    background: barBg,
-                  }}
-                />
-                <span className="relative z-10" style={{ color }}>
-                  {(level.price * 100).toFixed(1)}¢
-                </span>
-                <span className="relative z-10 text-right text-[var(--muted-foreground)]">
-                  {level.size >= 1000
-                    ? `${(level.size / 1000).toFixed(1)}k`
-                    : level.size.toFixed(0)}
-                </span>
+        <div
+          className="grid grid-cols-2 px-5 py-2.5 text-[10px] uppercase tracking-wide text-[var(--subtle-foreground)]"
+          style={{ background: "var(--surface-2)" }}
+        >
+          <span>Ask</span>
+          <span className="text-right">Size</span>
+        </div>
+      </div>
+
+      {/* Fixed-height scroll window: the book scrolls in HERE, the panel
+          height never changes, so it can't push the rest of the page. */}
+      <div className="overflow-y-auto" style={{ height: 300 }}>
+        <div className="grid grid-cols-2">
+          <div style={{ borderRight: "1px solid var(--border)" }}>
+            {bids.length === 0 ? (
+              <div className="px-5 py-8 text-[11px] text-[var(--subtle-foreground)] text-center">
+                No bids
               </div>
-            ))
-          )}
+            ) : (
+              renderLevels(bids, "bid")
+            )}
+          </div>
+          <div>
+            {asks.length === 0 ? (
+              <div className="px-5 py-8 text-[11px] text-[var(--subtle-foreground)] text-center">
+                No asks
+              </div>
+            ) : (
+              renderLevels(asks, "ask")
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -246,13 +249,19 @@ export default function IndicatorsPage() {
   const asset = getAsset(assetId);
   const timeframe = getTimeframe(timeframeId);
 
+  // Cost gate: every live feed below is enabled only while a session is
+  // active. Sessions are user-started and auto-stop on idle / tab-hidden /
+  // 15-min cap, so an unattended tab streams nothing. See useMonitorSession.
+  const session = useMonitorSession();
+
   const { spot, futures, spotConnected, futuresConnected } = useBinancePrice({
     symbol: asset.binance,
+    enabled: session.active,
   });
 
   const marketsUrl = `/api/crypto/5m-markets?asset=${assetId}&timeframe=${timeframeId}`;
   const { data: marketsData, mutate: refreshMarkets } =
-    useSWR<Crypto5mResponse>(marketsUrl, fetcher, {
+    useSWR<Crypto5mResponse>(session.active ? marketsUrl : null, fetcher, {
       refreshInterval: 2000,
     });
 
@@ -375,7 +384,7 @@ export default function IndicatorsPage() {
     isConnected: polyConnected,
   } = useBTCMarketWebSocket({
     tokenIds: allTokenIds,
-    enabled: allTokenIds.length >= 2,
+    enabled: session.active && allTokenIds.length >= 2,
   });
 
   const upTokenId = tokenIds[0];
@@ -385,9 +394,22 @@ export default function IndicatorsPage() {
   const upBook = upTokenId ? books.get(upTokenId) : undefined;
   const downBook = downTokenId ? books.get(downTokenId) : undefined;
 
-  const { prices: chainlinkPrices, status: chainlinkStatus } = useChainlinkStream();
+  const { prices: chainlinkPrices, status: chainlinkStatus } =
+    useChainlinkStream({ enabled: session.active });
   const chainlinkPrice =
     chainlinkPrices?.[asset.chainlinkSymbol] ?? null;
+
+  // Chainlink TWAP (Polymarket's settlement feed) via the public RTDS
+  // socket. The window follows the timeframe: 5m → 30s TWAP, 15m → 60s.
+  const { prices: twapPrices, isConnected: twapConnected } = useTwapStream({
+    enabled: session.active,
+  });
+  const twapRecord = twapPrices[asset.chainlinkSymbol];
+  const twapQuote =
+    timeframe.twapWindowSeconds === 30 ? twapRecord.twap30 : twapRecord.twap60;
+
+  // Toggle for the Chainlink TWAP settlement-feed line on the market chart.
+  const [showTwap, setShowTwap] = useState(false);
 
   const spread = spot && futures ? futures.price - spot.price : null;
 
@@ -456,7 +478,7 @@ export default function IndicatorsPage() {
   const { trades: walletStreamTrades, isStreaming: walletStreamConnected } =
     useWalletTradeStream({
       wallets: walletAddresses,
-      enabled: walletAddresses.length > 0,
+      enabled: session.active && walletAddresses.length > 0,
     });
 
   // Filter to just trades on the current asset+timeframe AND the
@@ -526,6 +548,7 @@ export default function IndicatorsPage() {
     spotConnected &&
     futuresConnected &&
     chainlinkOk &&
+    twapConnected &&
     polyConnected &&
     (walletAddresses.length === 0 || walletStreamConnected);
 
@@ -574,8 +597,9 @@ export default function IndicatorsPage() {
           </p>
         </div>
 
-      {/* Price cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-5 md:gap-6">
+      {/* Price cards — 6 cards: 2×3 on mobile, two rows of 3 on desktop so
+          the monospace prices always fit inside their cards. */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 md:gap-5">
         <PriceCard
           label={`Binance ${asset.symbol} Spot`}
           value={spot ? formatPrice(spot.price) : "—"}
@@ -591,6 +615,10 @@ export default function IndicatorsPage() {
               ? formatPrice(chainlinkPrice.price)
               : "—"
           }
+        />
+        <PriceCard
+          label={`CL TWAP ${timeframe.twapWindowSeconds}s`}
+          value={twapQuote ? formatPrice(twapQuote.price) : "—"}
         />
         <PriceCard
           label="UP Share"
@@ -681,6 +709,10 @@ export default function IndicatorsPage() {
             downMidPrice={downData?.midPrice ?? null}
             spotPrice={spot?.price ?? null}
             futuresPrice={futures?.price ?? null}
+            twapPrice={twapQuote?.price ?? null}
+            twapWindowSeconds={timeframe.twapWindowSeconds}
+            showTwap={showTwap}
+            onShowTwapChange={setShowTwap}
             walletTrades={walletTrades}
             assetSymbol={asset.symbol}
             rangeOptions={asset.rangeOptions}
@@ -730,12 +762,23 @@ export default function IndicatorsPage() {
             label="Chainlink"
             disabled={chainlinkDisabled}
           />
+          <StatusRow connected={twapConnected} label="Chainlink TWAP" />
           <StatusRow connected={polyConnected} label="Polymarket" />
           {walletAddresses.length > 0 && (
             <StatusRow connected={walletStreamConnected} label="Wallet Stream" />
           )}
         </div>
       </Modal>
+
+      <SessionGate
+        active={session.active}
+        status={session.status}
+        showExtendPrompt={session.showExtendPrompt}
+        secondsUntilCap={session.secondsUntilCap}
+        onStart={session.start}
+        onExtend={session.extend}
+        onEndNow={() => session.stop("ended-cap")}
+      />
     </div>
   );
 }

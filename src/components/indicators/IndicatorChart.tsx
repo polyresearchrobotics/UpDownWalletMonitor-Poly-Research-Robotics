@@ -8,6 +8,7 @@ const COLORS = {
   spot: "#5eaaff",       // blue
   futures: "#9179f2",    // violet
   chainlink: "#ffc85c",  // amber
+  twap: "#2dd4bf",       // teal — Chainlink TWAP (settlement feed)
   up: "#34d08c",         // success green
   down: "#ff5d73",       // danger red
   background: "#101118", // var(--surface)
@@ -46,6 +47,13 @@ interface IndicatorChartProps {
   rangeOptions?: number[];
   /** Default range value from the stepper. */
   defaultRange?: number;
+  /** Live Chainlink TWAP price for this timeframe's settlement window. */
+  twapPrice?: number | null;
+  /** TWAP averaging window in seconds (30 for 5m cycles, 60 for 15m). */
+  twapWindowSeconds?: number;
+  /** Show the Chainlink TWAP line on the chart. */
+  showTwap?: boolean;
+  onShowTwapChange?: (value: boolean) => void;
 }
 
 export const IndicatorChart = memo(function IndicatorChart({
@@ -61,6 +69,10 @@ export const IndicatorChart = memo(function IndicatorChart({
   assetSymbol = "BTC",
   rangeOptions = DEFAULT_RANGE_OPTIONS,
   defaultRange = DEFAULT_RANGE,
+  twapPrice,
+  twapWindowSeconds = 30,
+  showTwap = false,
+  onShowTwapChange,
 }: IndicatorChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -68,14 +80,19 @@ export const IndicatorChart = memo(function IndicatorChart({
   const spotPoints = useRef<Point[]>([]);
   const futuresPoints = useRef<Point[]>([]);
   const chainlinkPoints = useRef<Point[]>([]);
+  const twapPoints = useRef<Point[]>([]);
   const upPoints = useRef<Point[]>([]);
   const downPoints = useRef<Point[]>([]);
 
   const latestSpot = useRef<number | null>(null);
   const latestFutures = useRef<number | null>(null);
   const latestChainlink = useRef<number | null>(null);
+  const latestTwap = useRef<number | null>(null);
   const latestUp = useRef<number | null>(null);
   const latestDown = useRef<number | null>(null);
+
+  const showTwapRef = useRef(showTwap);
+  showTwapRef.current = showTwap;
 
   const btcMid = useRef<number | null>(null);
   const [btcRange, setBtcRange] = useState(defaultRange);
@@ -146,6 +163,14 @@ export const IndicatorChart = memo(function IndicatorChart({
     latestFutures.current = futuresPrice;
     if (btcMid.current === null) btcMid.current = futuresPrice;
   }, [futuresPrice, maxPriceJump]);
+
+  useEffect(() => {
+    if (twapPrice == null || !isFinite(twapPrice) || twapPrice <= 0) return;
+    const prev = latestTwap.current;
+    if (prev !== null && Math.abs(twapPrice - prev) > maxPriceJump) return;
+    latestTwap.current = twapPrice;
+    if (btcMid.current === null) btcMid.current = twapPrice;
+  }, [twapPrice, maxPriceJump]);
 
   // Update Polymarket UP/DOWN from props (from the page-level hook)
   // Anti-barcode: reject jumps > 30¢ from last known value (likely bad data)
@@ -398,74 +423,114 @@ export const IndicatorChart = memo(function IndicatorChart({
     const liveDown = latestDown.current !== null ? latestDown.current * 100 : null;
 
     const liveChainlink = latestChainlink.current;
+    const liveTwap = latestTwap.current;
 
     drawLine(spotPoints.current, COLORS.spot, btcToY, liveSpot);
     drawLine(futuresPoints.current, COLORS.futures, btcToY, liveFutures);
     drawLine(chainlinkPoints.current, COLORS.chainlink, btcToY, liveChainlink);
+    if (showTwapRef.current) {
+      drawLine(twapPoints.current, COLORS.twap, btcToY, liveTwap);
+    }
     drawLine(upPoints.current, COLORS.up, shareToY, liveUp);
     drawLine(downPoints.current, COLORS.down, shareToY, liveDown);
+
+    // ── Live UP / DOWN share-price tags ──────────────────────────────────
+    // List the current Polymarket UP and DOWN share prices right on the graph,
+    // pinned to the right (share-price) Y-axis at each line's live value.
+    {
+      const shareTags: Array<{ y: number; text: string; color: string }> = [];
+      if (liveUp !== null)
+        shareTags.push({ y: shareToY(liveUp), text: `UP ${liveUp.toFixed(1)}¢`, color: COLORS.up });
+      if (liveDown !== null)
+        shareTags.push({ y: shareToY(liveDown), text: `DOWN ${liveDown.toFixed(1)}¢`, color: COLORS.down });
+
+      const tagH = 16;
+      // De-collide the two tags when UP/DOWN sit near 50/50.
+      if (shareTags.length === 2) {
+        shareTags.sort((a, b) => a.y - b.y);
+        const gap = shareTags[1].y - shareTags[0].y;
+        if (gap < tagH) {
+          const push = (tagH - gap) / 2;
+          shareTags[0].y -= push;
+          shareTags[1].y += push;
+        }
+      }
+
+      ctx.font = "bold 10px 'JetBrains Mono', 'SF Mono', monospace";
+      ctx.textBaseline = "middle";
+      const xRight = w - pad.right;
+      for (const tag of shareTags) {
+        const padX = 6;
+        const boxW = ctx.measureText(tag.text).width + padX * 2;
+        const boxX = w - 4 - boxW; // flush to the canvas right edge
+        const y = Math.max(
+          pad.top + tagH / 2,
+          Math.min(pad.top + plotH - tagH / 2, tag.y)
+        );
+
+        // Connector from the axis (line end) to the tag.
+        ctx.strokeStyle = tag.color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(xRight, tag.y);
+        ctx.lineTo(boxX, y);
+        ctx.stroke();
+
+        // Rounded pill.
+        const by = y - tagH / 2;
+        const r = 3;
+        ctx.fillStyle = tag.color;
+        ctx.beginPath();
+        ctx.moveTo(boxX + r, by);
+        ctx.arcTo(boxX + boxW, by, boxX + boxW, by + tagH, r);
+        ctx.arcTo(boxX + boxW, by + tagH, boxX, by + tagH, r);
+        ctx.arcTo(boxX, by + tagH, boxX, by, r);
+        ctx.arcTo(boxX, by, boxX + boxW, by, r);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#0a0b0f";
+        ctx.textAlign = "left";
+        ctx.fillText(tag.text, boxX + padX, y);
+      }
+      ctx.textBaseline = "alphabetic";
+    }
 
     // Wallet Trade Markers
     const wTrades = walletTradesRef.current;
     if (wTrades.length > 0) {
-      // Find the line's interpolated y-value at a given timestamp so each
-      // trade arrow sits exactly on its corresponding UP/DOWN price line.
-      // Without this the marker plotted at the trade's executed fill
-      // price, which can be a few cents off the live mid (taker fills
-      // cross the spread, makers sit at the bid/ask) and looks detached
-      // from the line. Visually it's misleading.
-      const interpolateLineAt = (
-        pts: { t: number; v: number }[],
-        t: number
-      ): number | null => {
-        if (pts.length === 0) return null;
-        if (t <= pts[0].t) return pts[0].v;
-        if (t >= pts[pts.length - 1].t) return pts[pts.length - 1].v;
-        let lo = 0;
-        let hi = pts.length - 1;
-        while (lo < hi - 1) {
-          const mid = (lo + hi) >> 1;
-          if (pts[mid].t <= t) lo = mid;
-          else hi = mid;
-        }
-        const left = pts[lo];
-        const right = pts[hi];
-        if (right.t === left.t) return left.v;
-        const frac = (t - left.t) / (right.t - left.t);
-        return left.v + frac * (right.v - left.v);
-      };
-
       for (const trade of wTrades) {
         const tx = timeToX(trade.timestamp);
         if (tx < pad.left - 10 || tx > w - pad.right + 10) continue;
 
-        // Snap each marker to the line that matches its outcome. UNKNOWN
-        // outcomes (rare — happens when the RTDS payload's `outcome`
-        // field is missing) fall back to the trade's executed price.
-        const linePrice =
-          trade.outcome === "UP"
-            ? interpolateLineAt(upPoints.current, trade.timestamp)
-            : trade.outcome === "DOWN"
-            ? interpolateLineAt(downPoints.current, trade.timestamp)
-            : null;
-        const priceCents = linePrice ?? trade.price * 100;
+        // Plot each marker at the price the wallet actually filled at, so the
+        // marker position and label match the trade feed exactly. (Previously
+        // this snapped to the interpolated UP/DOWN line value at the trade
+        // timestamp, which drifted 1-2¢ off the real fill price.)
+        const priceCents = trade.priceCents;
         const ty = shareToY(priceCents);
         const isBuy = trade.side === "BUY";
         const markerColor = trade.outcome === "UP" ? COLORS.up : trade.outcome === "DOWN" ? COLORS.down : COLORS.tradeBuy;
         const mSize = 7;
+        // Anchor the triangle TIP exactly on the fill-price point (ty); the
+        // body extends away from it — buys point up (▲) with the body below,
+        // sells point down (▼) with the body above. Keeps the accurate
+        // fill-price position while removing the old ~7px tip overshoot, so
+        // the tip lands right where the trade actually printed.
+        const triH = mSize * 1.7;
 
         ctx.fillStyle = markerColor;
         ctx.strokeStyle = "#fff";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         if (isBuy) {
-          ctx.moveTo(tx, ty - mSize);
-          ctx.lineTo(tx - mSize, ty + mSize * 0.6);
-          ctx.lineTo(tx + mSize, ty + mSize * 0.6);
+          ctx.moveTo(tx, ty); // tip on the price
+          ctx.lineTo(tx - mSize, ty + triH);
+          ctx.lineTo(tx + mSize, ty + triH);
         } else {
-          ctx.moveTo(tx, ty + mSize);
-          ctx.lineTo(tx - mSize, ty - mSize * 0.6);
-          ctx.lineTo(tx + mSize, ty - mSize * 0.6);
+          ctx.moveTo(tx, ty); // tip on the price
+          ctx.lineTo(tx - mSize, ty - triH);
+          ctx.lineTo(tx + mSize, ty - triH);
         }
         ctx.closePath();
         ctx.fill();
@@ -476,14 +541,14 @@ export const IndicatorChart = memo(function IndicatorChart({
         ctx.textAlign = "center";
         const orderType = trade.executionRole === "TAKER" ? " FOK" : trade.executionRole === "MAKER" ? " GTC" : "";
         const label = `${isBuy ? "B" : "S"} ${priceCents.toFixed(0)}\u00A2${orderType}`;
-        const labelY = isBuy ? ty - mSize - 5 : ty + mSize + 11;
+        const labelY = isBuy ? ty - 8 : ty + 16;
         ctx.fillText(label, tx, labelY);
 
         if (trade.cost > 0) {
           ctx.fillStyle = "rgba(236,236,243,0.55)";
           ctx.font = "8px 'JetBrains Mono', 'SF Mono', monospace";
-          const costStr = trade.cost >= 1000 ? `$${(trade.cost / 1000).toFixed(1)}k` : `$${trade.cost.toFixed(0)}`;
-          const costY = isBuy ? ty - mSize - 15 : ty + mSize + 21;
+          const costStr = trade.cost >= 1000 ? `$${(trade.cost / 1000).toFixed(1)}k` : `$${trade.cost.toFixed(2)}`;
+          const costY = isBuy ? ty - 18 : ty + 26;
           ctx.fillText(costStr, tx, costY);
         }
       }
@@ -645,6 +710,7 @@ export const IndicatorChart = memo(function IndicatorChart({
       spotPoints.current = [];
       futuresPoints.current = [];
       chainlinkPoints.current = [];
+      twapPoints.current = [];
       upPoints.current = [];
       downPoints.current = [];
       btcMid.current = null;
@@ -683,6 +749,7 @@ export const IndicatorChart = memo(function IndicatorChart({
       const sp = latestSpot.current;
       const fu = latestFutures.current;
       const cl = latestChainlink.current;
+      const tw = latestTwap.current;
       const up = latestUp.current;
       const dn = latestDown.current;
 
@@ -697,6 +764,10 @@ export const IndicatorChart = memo(function IndicatorChart({
       if (cl !== null) {
         chainlinkPoints.current.push({ t: now, v: cl });
         if (chainlinkPoints.current.length > MAX_POINTS) chainlinkPoints.current.shift();
+      }
+      if (tw !== null) {
+        twapPoints.current.push({ t: now, v: tw });
+        if (twapPoints.current.length > MAX_POINTS) twapPoints.current.shift();
       }
       if (up !== null) {
         upPoints.current.push({ t: now, v: up * 100 });
@@ -738,6 +809,9 @@ export const IndicatorChart = memo(function IndicatorChart({
     { color: COLORS.spot, label: `${assetSymbol} Spot` },
     { color: COLORS.futures, label: `${assetSymbol} Futures` },
     { color: COLORS.chainlink, label: "Chainlink" },
+    ...(showTwap
+      ? [{ color: COLORS.twap, label: `Chainlink TWAP ${twapWindowSeconds}s` }]
+      : []),
     { color: COLORS.up, label: "UP Share" },
     { color: COLORS.down, label: "DOWN Share" },
   ];
@@ -759,13 +833,42 @@ export const IndicatorChart = memo(function IndicatorChart({
             </span>
           </div>
         ))}
+        {onShowTwapChange && (
+          <button
+            onClick={() => onShowTwapChange(!showTwap)}
+            className="flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap"
+            style={{
+              background: showTwap ? "rgba(45,212,191,0.12)" : "var(--surface-2)",
+              border: `1px solid ${showTwap ? COLORS.twap : "var(--border)"}`,
+              color: showTwap ? COLORS.twap : "var(--muted-foreground)",
+            }}
+            title={`Show the Chainlink ${twapWindowSeconds}s TWAP settlement feed on the chart`}
+          >
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{
+                background: showTwap ? COLORS.twap : "var(--subtle-foreground)",
+                boxShadow: showTwap ? `0 0 6px ${COLORS.twap}` : "none",
+              }}
+            />
+            TWAP {twapWindowSeconds}s {showTwap ? "ON" : "OFF"}
+          </button>
+        )}
         {walletTradesRef.current.length > 0 && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 whitespace-nowrap">
             <span className="text-[11px]" style={{ color: COLORS.tradeBuy }}>
               {"\u25B2\u25BC"}
             </span>
+            {/* Fixed-width count so digit changes can't tip the wrapping
+                legend onto a second line and nudge the chart below it. */}
             <span className="text-[11px] text-[var(--muted-foreground)]">
-              Tracked ({walletTradesRef.current.length})
+              Tracked{" "}
+              <span
+                className="inline-block text-right tabular-nums"
+                style={{ minWidth: "4ch" }}
+              >
+                {walletTradesRef.current.length}
+              </span>
             </span>
           </div>
         )}
